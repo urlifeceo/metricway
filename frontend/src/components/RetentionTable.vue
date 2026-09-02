@@ -6,8 +6,8 @@
         <tr>
           <th class="p-3">Когорта</th>
           <th class="p-3">Размер</th>
-          <th class="p-3 text-center" v-for="day in [0, 1, 3, 7, 14, 30]" :key="day">
-            Day {{ day }}
+          <th class="p-3 text-center" v-for="m in 7" :key="m">
+            M{{ m - 1 }}
           </th>
         </tr>
       </thead>
@@ -16,12 +16,12 @@
           <td class="p-3 font-medium text-white">{{ cohort.cohort_date }}</td>
           <td class="p-3">{{ cohort.cohort_size }}</td>
           <td
-            v-for="day in [0, 1, 3, 7, 14, 30]"
-            :key="day"
+            v-for="m in 7"
+            :key="m"
             class="p-3 text-center font-semibold"
-            :style="getHeatmapStyle(cohort.retention[day])"
+            :style="getHeatmapStyle(cohort.retention[m - 1])"
           >
-            {{ cohort.retention[day] !== undefined ? cohort.retention[day] + '%' : '-' }}
+            {{ cohort.retention[m - 1] !== undefined ? cohort.retention[m - 1] + '%' : '—' }}
           </td>
         </tr>
       </tbody>

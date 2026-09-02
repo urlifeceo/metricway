@@ -4,8 +4,11 @@ from fastapi import APIRouter, Query, HTTPException
 from app.core.clickhouse import get_ch_client
 from app.schemas.analytics import (
     DAUResponse,
+    ActivityPoint,
     FinancialMetricsResponse,
     UTMMetric,
+    TrafficMetric,
+    TrafficSpendRequest,
     FunnelStep,
     CohortRetention,
 )
@@ -46,6 +49,45 @@ def get_dau(
     )
 
     return [DAUResponse(date=row[0], dau=row[1]) for row in result.result_rows]
+
+
+@router.get("/activity", response_model=List[ActivityPoint])
+def get_activity(
+    project_token: str,
+    granularity: str = Query("dau", pattern="^(dau|wau|mau)$"),
+    from_date: datetime = Query(default_factory=get_default_from_date),
+    to_date: datetime = Query(default_factory=datetime.now),
+):
+    to_date = normalize_to_date(to_date)
+    client = get_ch_client()
+
+    bucket_expr = {
+        "dau": "toDate(ts)",
+        "wau": "toMonday(ts)",
+        "mau": "toStartOfMonth(ts)",
+    }[granularity]
+
+    query = f"""
+        SELECT
+            {bucket_expr} AS bucket,
+            uniqExact(user_id) AS value
+        FROM tgmetrics.events
+        WHERE project_token = {{project_token:String}}
+          AND toDate(ts) >= toDate({{from_date:DateTime}})
+          AND toDate(ts) <= toDate({{to_date:DateTime}})
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    """
+    result = client.query(
+        query,
+        parameters={
+            "project_token": project_token,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+    )
+
+    return [ActivityPoint(date=row[0], value=row[1]) for row in result.result_rows]
 
 
 @router.get("/financials", response_model=FinancialMetricsResponse)
@@ -103,6 +145,156 @@ def get_financials(
     arppu = round(total_revenue / paying_users, 2) if paying_users > 0 else 0.0
     conversion_rate = round((paying_users / total_users) * 100, 2) if total_users > 0 else 0.0
 
+    subscription_amount = """
+        multiIf(
+            positionCaseInsensitive(product_id, 'year') > 0
+                OR positionCaseInsensitive(product_id, 'annual') > 0,
+            amount / 12,
+            positionCaseInsensitive(product_id, 'month') > 0,
+            amount,
+            0
+        )
+    """
+
+    mrr_query = f"""
+        SELECT
+            sum(monthly_eq) AS mrr,
+            count() AS active_subscriptions
+        FROM (
+            SELECT
+                user_id,
+                max({subscription_amount}) AS monthly_eq
+            FROM tgmetrics.purchases
+            WHERE project_token = {{project_token:String}}
+              AND ts >= now() - INTERVAL 31 DAY
+            GROUP BY user_id
+            HAVING monthly_eq > 0
+        )
+    """
+    mrr_res = client.query(
+        mrr_query,
+        parameters={
+            "project_token": project_token,
+        },
+    ).first_row
+
+    mrr = round(mrr_res[0] or 0.0, 2)
+    active_subscriptions = mrr_res[1] or 0
+    arr = round(mrr * 12, 2)
+
+    churn_query = f"""
+        SELECT
+            count() AS sub_users,
+            countIf(last_sub_ts < now() - INTERVAL 31 DAY) AS churned
+        FROM (
+            SELECT
+                user_id,
+                max(ts) AS last_sub_ts
+            FROM tgmetrics.purchases
+            WHERE project_token = {{project_token:String}}
+              AND {subscription_amount} > 0
+            GROUP BY user_id
+        )
+    """
+    churn_res = client.query(
+        churn_query,
+        parameters={
+            "project_token": project_token,
+        },
+    ).first_row
+
+    sub_users_ever = churn_res[0] or 0
+    churned = churn_res[1] or 0
+    churn_rate = round((churned / sub_users_ever) * 100, 2) if sub_users_ever > 0 else 0.0
+
+    forecast_ltv = round(arppu / (churn_rate / 100), 2) if churn_rate > 0 else arppu
+
+    spend_query = """
+        SELECT sum(spend) AS total_spend
+        FROM (
+            SELECT
+                utm_source,
+                argMax(spend, updated_at) AS spend
+            FROM tgmetrics.traffic_costs
+            WHERE project_token = {project_token:String}
+            GROUP BY utm_source
+        )
+    """
+    spend_res = client.query(
+        spend_query,
+        parameters={
+            "project_token": project_token,
+        },
+    ).first_row
+
+    total_spend = spend_res[0] or 0.0
+    cac = round(total_spend / paying_users, 2) if paying_users > 0 and total_spend > 0 else 0.0
+    ltv_cac_ratio = round(forecast_ltv / cac, 2) if cac > 0 else 0.0
+
+    cr_first_query = """
+        SELECT
+            count() AS new_users,
+            countIf(has_purchase = 1) AS new_buyers
+        FROM (
+            SELECT
+                nu.user_id AS user_id,
+                (pb.user_id != 0) AS has_purchase
+            FROM (
+                SELECT user_id
+                FROM tgmetrics.users_meta
+                WHERE project_token = {project_token:String}
+                GROUP BY user_id
+                HAVING min(first_seen_ts) >= {from_date:DateTime}
+                   AND min(first_seen_ts) <= {to_date:DateTime}
+            ) AS nu
+            LEFT JOIN (
+                SELECT DISTINCT user_id
+                FROM tgmetrics.purchases
+                WHERE project_token = {project_token:String}
+            ) AS pb ON nu.user_id = pb.user_id
+        )
+    """
+    cr_first_res = client.query(
+        cr_first_query,
+        parameters={
+            "project_token": project_token,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+    ).first_row
+
+    new_users = cr_first_res[0] or 0
+    new_buyers = cr_first_res[1] or 0
+    cr_first = round((new_buyers / new_users) * 100, 2) if new_users > 0 else 0.0
+
+    cr_repeat_query = """
+        SELECT
+            uniqExact(user_id) AS paying,
+            uniqExactIf(user_id, payments >= 2) AS repeat
+        FROM (
+            SELECT
+                user_id,
+                count() AS payments
+            FROM tgmetrics.purchases
+            WHERE project_token = {project_token:String}
+              AND ts >= {from_date:DateTime}
+              AND ts <= {to_date:DateTime}
+            GROUP BY user_id
+        )
+    """
+    cr_repeat_res = client.query(
+        cr_repeat_query,
+        parameters={
+            "project_token": project_token,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+    ).first_row
+
+    paying = cr_repeat_res[0] or 0
+    repeat = cr_repeat_res[1] or 0
+    cr_repeat = round((repeat / paying) * 100, 2) if paying > 0 else 0.0
+
     return FinancialMetricsResponse(
         total_revenue=total_revenue,
         paying_users=paying_users,
@@ -110,6 +302,14 @@ def get_financials(
         arpu=arpu,
         arppu=arppu,
         conversion_rate=conversion_rate,
+        mrr=mrr,
+        arr=arr,
+        active_subscriptions=active_subscriptions,
+        churn_rate=churn_rate,
+        forecast_ltv=forecast_ltv,
+        ltv_cac_ratio=ltv_cac_ratio,
+        cr_first=cr_first,
+        cr_repeat=cr_repeat,
     )
 
 
@@ -172,69 +372,220 @@ def get_utm_performance(
     ]
 
 
-@router.get("/retention", response_model=List[CohortRetention])
-def get_retention(
+@router.get("/traffic", response_model=List[TrafficMetric])
+def get_traffic(
     project_token: str,
     from_date: datetime = Query(default_factory=get_default_from_date),
     to_date: datetime = Query(default_factory=datetime.now),
 ):
+    to_date = normalize_to_date(to_date)
     client = get_ch_client()
 
-    query = """
-        WITH
-            [0, 1, 3, 7, 14, 30] AS target_days,
-
-            users_cohorts AS (
-                SELECT 
-                    user_id, 
-                    toDate(min(first_seen_ts)) AS first_seen_date
-                FROM tgmetrics.users_meta
-                WHERE project_token = {project_token:String}
-                GROUP BY user_id
-                HAVING first_seen_date >= toDate({from_date:DateTime})
-                   AND first_seen_date <= toDate({to_date:DateTime})
-            ),
-
-            retention_raw AS (
-                SELECT
-                    toString(u.first_seen_date) AS cohort_day,
-                    dateDiff('day', u.first_seen_date, e.ts) AS day_number,
-                    e.user_id AS user_id
-                FROM users_cohorts AS u
-                INNER JOIN tgmetrics.events AS e 
-                    ON e.project_token = {project_token:String} 
-                   AND e.user_id = u.user_id 
-                   AND e.ts >= u.first_seen_date
-                WHERE dateDiff('day', u.first_seen_date, e.ts) IN target_days
-            ),
-
-            cohort_sizes AS (
-                SELECT 
-                    toString(first_seen_date) AS cohort_day,
-                    uniqExact(user_id) AS cohort_size
-                FROM users_cohorts
-                GROUP BY cohort_day
-            ),
-
-            active_per_day AS (
-                SELECT
-                    cohort_day,
-                    day_number,
-                    uniqExact(user_id) AS active_users
-                FROM retention_raw
-                GROUP BY cohort_day, day_number
-            )
-
+    traffic_query = """
+        WITH deduplicated_traffic AS (
+            SELECT
+                user_id,
+                any(utm_source) AS source
+            FROM tgmetrics.traffic
+            WHERE project_token = {project_token:String}
+              AND first_seen_ts >= {from_date:DateTime}
+              AND first_seen_ts <= {to_date:DateTime}
+            GROUP BY user_id
+        )
         SELECT
-            c.cohort_day,
-            c.cohort_size,
-            groupArray(a.day_number) AS active_days,
-            groupArray(a.active_users) AS active_users
-        FROM cohort_sizes AS c
-        LEFT JOIN active_per_day AS a ON c.cohort_day = a.cohort_day
-        GROUP BY c.cohort_day, c.cohort_size
-        ORDER BY c.cohort_day ASC
+            t.source AS source,
+            countDistinct(t.user_id) AS acquisitions,
+            countDistinct(p.user_id) AS buyers,
+            round((countDistinct(p.user_id) / nullIf(countDistinct(t.user_id), 0)) * 100, 2) AS conversion_rate
+        FROM deduplicated_traffic AS t
+        LEFT JOIN tgmetrics.purchases AS p
+               ON p.project_token = {project_token:String}
+              AND t.user_id = p.user_id
+              AND p.ts >= {from_date:DateTime}
+              AND p.ts <= {to_date:DateTime}
+        GROUP BY source
+        ORDER BY acquisitions DESC
     """
+    traffic_result = client.query(
+        traffic_query,
+        parameters={
+            "project_token": project_token,
+            "from_date": from_date,
+            "to_date": to_date,
+        },
+    )
+
+    spend_query = """
+        SELECT
+            utm_source,
+            argMax(spend, updated_at) AS spend
+        FROM tgmetrics.traffic_costs
+        WHERE project_token = {project_token:String}
+        GROUP BY utm_source
+    """
+    spend_result = client.query(
+        spend_query,
+        parameters={
+            "project_token": project_token,
+        },
+    )
+    spends = {row[0]: (row[1] or 0.0) for row in spend_result.result_rows}
+
+    metrics = []
+    for source, acquisitions, buyers, conversion_rate in traffic_result.result_rows:
+        spend = spends.get(source, 0.0)
+        cac = round(spend / buyers, 2) if buyers > 0 and spend > 0 else 0.0
+        metrics.append(
+            TrafficMetric(
+                source=source,
+                acquisitions=acquisitions,
+                buyers=buyers,
+                conversion_rate=conversion_rate or 0.0,
+                spend=spend,
+                cac=cac,
+            )
+        )
+
+    return metrics
+
+
+@router.put("/traffic/spend")
+def update_traffic_spend(request: TrafficSpendRequest):
+    if request.spend < 0:
+        raise HTTPException(status_code=400, detail="spend must be >= 0")
+
+    client = get_ch_client()
+    client.insert(
+        "tgmetrics.traffic_costs",
+        [[request.project_token, request.source, request.spend, datetime.now()]],
+        column_names=["project_token", "utm_source", "spend", "updated_at"],
+    )
+
+    return {"status": "ok"}
+
+
+@router.get("/retention", response_model=List[CohortRetention])
+def get_retention(
+    project_token: str,
+    unit: str = Query("day", pattern="^(day|month)$"),
+    from_date: datetime = Query(default_factory=get_default_from_date),
+    to_date: datetime = Query(default_factory=datetime.now),
+):
+    to_date = normalize_to_date(to_date)
+    client = get_ch_client()
+
+    if unit == "month":
+        query = """
+            WITH
+                [0, 1, 2, 3, 4, 5, 6] AS target_months,
+
+                users_cohorts AS (
+                    SELECT
+                        user_id,
+                        toStartOfMonth(min(first_seen_ts)) AS cohort_month
+                    FROM tgmetrics.users_meta
+                    WHERE project_token = {project_token:String}
+                    GROUP BY user_id
+                    HAVING cohort_month >= toStartOfMonth({from_date:DateTime})
+                       AND cohort_month <= toStartOfMonth({to_date:DateTime})
+                ),
+
+                retention_raw AS (
+                    SELECT
+                        toString(u.cohort_month) AS cohort_id,
+                        dateDiff('month', u.cohort_month, toStartOfMonth(e.ts)) AS period_number,
+                        e.user_id AS user_id
+                    FROM users_cohorts AS u
+                    INNER JOIN tgmetrics.events AS e
+                        ON e.project_token = {project_token:String}
+                       AND e.user_id = u.user_id
+                       AND e.ts >= u.cohort_month
+                    WHERE dateDiff('month', u.cohort_month, toStartOfMonth(e.ts)) IN target_months
+                ),
+
+                cohort_sizes AS (
+                    SELECT
+                        toString(cohort_month) AS cohort_id,
+                        uniqExact(user_id) AS cohort_size
+                    FROM users_cohorts
+                    GROUP BY cohort_id
+                ),
+
+                active_per_period AS (
+                    SELECT
+                        cohort_id,
+                        period_number,
+                        uniqExact(user_id) AS active_users
+                    FROM retention_raw
+                    GROUP BY cohort_id, period_number
+                )
+
+            SELECT
+                c.cohort_id,
+                c.cohort_size,
+                groupArray(a.period_number) AS active_periods,
+                groupArray(a.active_users) AS active_users
+            FROM cohort_sizes AS c
+            LEFT JOIN active_per_period AS a ON c.cohort_id = a.cohort_id
+            GROUP BY c.cohort_id, c.cohort_size
+            ORDER BY c.cohort_id ASC
+        """
+    else:
+        query = """
+            WITH
+                [0, 1, 3, 7, 14, 30] AS target_days,
+
+                users_cohorts AS (
+                    SELECT 
+                        user_id, 
+                        toDate(min(first_seen_ts)) AS first_seen_date
+                    FROM tgmetrics.users_meta
+                    WHERE project_token = {project_token:String}
+                    GROUP BY user_id
+                    HAVING first_seen_date >= toDate({from_date:DateTime})
+                       AND first_seen_date <= toDate({to_date:DateTime})
+                ),
+
+                retention_raw AS (
+                    SELECT
+                        toString(u.first_seen_date) AS cohort_id,
+                        dateDiff('day', u.first_seen_date, e.ts) AS period_number,
+                        e.user_id AS user_id
+                    FROM users_cohorts AS u
+                    INNER JOIN tgmetrics.events AS e 
+                        ON e.project_token = {project_token:String} 
+                       AND e.user_id = u.user_id 
+                       AND e.ts >= u.first_seen_date
+                    WHERE dateDiff('day', u.first_seen_date, e.ts) IN target_days
+                ),
+
+                cohort_sizes AS (
+                    SELECT 
+                        toString(first_seen_date) AS cohort_id,
+                        uniqExact(user_id) AS cohort_size
+                    FROM users_cohorts
+                    GROUP BY cohort_id
+                ),
+
+                active_per_period AS (
+                    SELECT
+                        cohort_id,
+                        period_number,
+                        uniqExact(user_id) AS active_users
+                    FROM retention_raw
+                    GROUP BY cohort_id, period_number
+                )
+
+            SELECT
+                c.cohort_id,
+                c.cohort_size,
+                groupArray(a.period_number) AS active_periods,
+                groupArray(a.active_users) AS active_users
+            FROM cohort_sizes AS c
+            LEFT JOIN active_per_period AS a ON c.cohort_id = a.cohort_id
+            GROUP BY c.cohort_id, c.cohort_size
+            ORDER BY c.cohort_id ASC
+        """
 
     result = client.query(
         query,
@@ -247,19 +598,19 @@ def get_retention(
 
     retention_list: List[CohortRetention] = []
 
-    for cohort_day, cohort_size, days, counts in result.result_rows:
+    for cohort_id, cohort_size, periods, counts in result.result_rows:
         retention = {
-            int(d): (
+            int(p): (
                 round((cnt / cohort_size) * 100, 2)
                 if cohort_size > 0 and cnt is not None
                 else 0.0
             )
-            for d, cnt in zip(days, counts)
+            for p, cnt in zip(periods, counts)
         }
 
         retention_list.append(
             CohortRetention(
-                cohort_date=str(cohort_day),
+                cohort_date=str(cohort_id),
                 cohort_size=cohort_size,
                 retention=retention,
             )

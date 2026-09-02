@@ -8,6 +8,11 @@ class DAUResponse(BaseModel):
     dau: int
 
 
+class ActivityPoint(BaseModel):
+    date: date
+    value: int
+
+
 class FinancialMetricsResponse(BaseModel):
     total_revenue: float
     paying_users: int
@@ -15,6 +20,14 @@ class FinancialMetricsResponse(BaseModel):
     arpu: float
     arppu: float
     conversion_rate: float
+    mrr: float
+    arr: float
+    active_subscriptions: int
+    churn_rate: float
+    forecast_ltv: float
+    ltv_cac_ratio: float
+    cr_first: float
+    cr_repeat: float
 
 
 class UTMMetric(BaseModel):
@@ -24,7 +37,22 @@ class UTMMetric(BaseModel):
     buyers: int
     revenue: float
     conversion_rate: float
-    
+
+
+class TrafficMetric(BaseModel):
+    source: str
+    acquisitions: int
+    buyers: int
+    conversion_rate: float
+    spend: float
+    cac: float
+
+
+class TrafficSpendRequest(BaseModel):
+    project_token: str
+    source: str
+    spend: float
+
 class CohortRetention(BaseModel):
     cohort_date: str
     cohort_size: int

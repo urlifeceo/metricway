@@ -1,6 +1,8 @@
-export interface DAUPoint {
+export type ActivityGranularity = 'dau' | 'wau' | 'mau'
+
+export interface ActivityPoint {
   date: string
-  dau: number
+  value: number
 }
 
 export interface FinancialMetrics {
@@ -10,15 +12,23 @@ export interface FinancialMetrics {
   arpu: number
   arppu: number
   conversion_rate: number
+  mrr: number
+  arr: number
+  active_subscriptions: number
+  churn_rate: number
+  forecast_ltv: number
+  ltv_cac_ratio: number
+  cr_first: number
+  cr_repeat: number
 }
 
-export interface UTMMetric {
+export interface TrafficMetric {
   source: string
-  campaign: string
   acquisitions: number
   buyers: number
-  revenue: number
   conversion_rate: number
+  spend: number
+  cac: number
 }
 
 export interface CohortRetention {

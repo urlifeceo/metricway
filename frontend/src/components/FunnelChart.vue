@@ -51,7 +51,7 @@
             {{ step.users_count }} юз. ({{ step.conversion_rate }}%)
           </span>
         </div>
-        <div class="w-full bg-gray-800 h-3 rounded-full overflow-hidden">
+        <div class="w-full bg-gray-800 h-2 rounded-full overflow-hidden">
           <div
             class="bg-blue-500 h-full rounded-full transition-all duration-500"
             :style="{ width: step.conversion_rate + '%' }"
