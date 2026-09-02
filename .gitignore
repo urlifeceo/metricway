@@ -47,7 +47,6 @@ htmlcov/
 
 # Misc
 *.sqlite3
-frontend/
 db_backups/
 AGENTS.md
 .ruff_cache/
