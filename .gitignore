@@ -1,0 +1,53 @@
+test_bot/
+.env
+.vscode/
+tgmetrics-sdk/
+subscriptions.db
+# OS-specific stuff
+.DS_Store
+Thumbs.db
+
+# Python Byte-compiled / packages
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env/
+.venv/
+poetry.lock
+Pipfile.lock
+
+# Distribution / packaging
+*.egg-info/
+build/
+dist/
+wheelhouse/
+
+# Logs
+*.log
+
+# Alembic migrations cache
+alembic.ini.bak
+versions/*.pyc
+
+# MyPy cache
+.mypy_cache/
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDE / Editor settings
+.vscode/
+.idea/
+
+# Misc
+*.sqlite3
+frontend/
+db_backups/
+AGENTS.md
+.ruff_cache/

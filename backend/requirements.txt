@@ -1,0 +1,26 @@
+fastapi==0.110.0
+uvicorn[standard]==0.28.0
+
+# JWT
+pyjwt==2.8.0
+
+# Password hashing
+passlib[bcrypt]==1.7.4
+
+# Для OAuth2PasswordRequestForm (обязательно!)
+python-multipart==0.0.9
+
+# Pydantic v2
+pydantic==2.6.4
+pydantic-settings==2.2.1
+
+# ClickHouse
+clickhouse-connect==0.7.3
+
+# Scheduler
+APScheduler>=3.10.0
+
+# Telegram bot
+aiogram>=3.0.0
+
+python-jose[cryptography]==3.5.0
