@@ -5,7 +5,7 @@ import type { TrafficMetric } from '@/types/analytics'
 
 const props = defineProps<{
   data: TrafficMetric[]
-  projectToken: string
+  projectToken: string | null
 }>()
 
 const store = useAnalyticsStore()
@@ -42,13 +42,13 @@ function onSpendInput(source: string) {
 </script>
 
 <template>
-  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-    <div class="p-6 border-b border-gray-800">
-      <h2 class="text-base font-semibold text-gray-200">Трафик</h2>
+  <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
+    <div class="p-6 border-b border-gray-200 dark:border-gray-800">
+      <h2 class="text-base font-semibold text-gray-900 dark:text-gray-200">Трафик</h2>
     </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm text-gray-300">
-        <thead class="bg-gray-900/50 text-gray-400 border-b border-gray-800 text-xs uppercase tracking-wider">
+      <table class="w-full text-left text-sm text-gray-700 dark:text-gray-300">
+        <thead class="bg-gray-50 dark:bg-gray-900/50 text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 text-xs uppercase tracking-wider">
           <tr>
             <th class="py-3 px-6">Источник</th>
             <th class="py-3 px-6">Количество</th>
@@ -58,9 +58,9 @@ function onSpendInput(source: string) {
             <th class="py-3 px-6">CAC</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-gray-800/60">
-          <tr v-for="row in data" :key="row.source" class="hover:bg-gray-800/40 transition">
-            <td class="py-4 px-6 font-medium text-white">{{ row.source || '—' }}</td>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-800/60">
+          <tr v-for="row in data" :key="row.source" class="hover:bg-gray-50 dark:hover:bg-gray-800/40 transition">
+            <td class="py-4 px-6 font-medium text-gray-900 dark:text-white">{{ row.source || '—' }}</td>
             <td class="py-4 px-6">{{ row.acquisitions }}</td>
             <td class="py-4 px-6">{{ row.buyers }}</td>
             <td class="py-4 px-6">{{ row.conversion_rate }}%</td>
@@ -70,13 +70,13 @@ function onSpendInput(source: string) {
                 @input="onSpendInput(row.source)"
                 type="text"
                 placeholder="Введите сумму"
-                class="bg-gray-800 border border-gray-700 focus:border-blue-500 text-sm rounded-lg px-3 py-1.5 outline-none text-gray-200 w-32"
+                class="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 focus:border-blue-500 text-sm rounded-lg px-3 py-1.5 outline-none text-gray-900 dark:text-gray-200 w-32"
               />
             </td>
             <td class="py-4 px-6">{{ row.cac }}</td>
           </tr>
           <tr v-if="!data?.length">
-            <td colspan="6" class="py-8 text-center text-gray-500">Нет данных</td>
+            <td colspan="6" class="py-8 text-center text-gray-400 dark:text-gray-500">Нет данных</td>
           </tr>
         </tbody>
       </table>

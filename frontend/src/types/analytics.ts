@@ -47,6 +47,11 @@ export interface FunnelStep {
   conversion_rate: number
 }
 
+export interface FunnelStepConfig {
+  event: string
+  label: string
+}
+
 export interface ProductMapping {
   product_id: string
   billing_type: BillingType

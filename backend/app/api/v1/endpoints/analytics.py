@@ -1,4 +1,5 @@
 from datetime import datetime, date
+import json
 from typing import List
 from fastapi import APIRouter, Query, HTTPException
 from app.core.clickhouse import get_ch_client
@@ -14,6 +15,9 @@ from app.schemas.analytics import (
     UnknownProduct,
     FunnelStep,
     CohortRetention,
+    FunnelStepConfig,
+    FunnelConfigRequest,
+    FunnelConfigResponse,
 )
 from app.utils.date import (
     get_default_from_date,
@@ -806,3 +810,51 @@ def get_funnel_events(project_token: str):
     """
     result = client.query(query, parameters={"project_token": project_token})
     return [row[0] for row in result.result_rows]
+
+
+@router.get("/funnel/config", response_model=FunnelConfigResponse)
+def get_funnel_config(project_token: str):
+    client = get_ch_client()
+
+    query = """
+        SELECT argMax(steps_json, updated_at) AS steps_json
+        FROM tgmetrics.funnel_configs
+        WHERE project_token = {project_token:String}
+        GROUP BY project_token
+    """
+    result = client.query(query, parameters={"project_token": project_token})
+
+    if not result.result_rows:
+        return FunnelConfigResponse(project_token=project_token, steps=[])
+
+    try:
+        raw_steps = json.loads(result.result_rows[0][0])
+    except (json.JSONDecodeError, TypeError):
+        raw_steps = []
+
+    steps = [
+        FunnelStepConfig(event=step["event"], label=step.get("label", ""))
+        for step in raw_steps
+        if isinstance(step, dict) and step.get("event")
+    ]
+    return FunnelConfigResponse(project_token=project_token, steps=steps)
+
+
+@router.put("/funnel/config")
+def update_funnel_config(request: FunnelConfigRequest):
+    events = [s.event.strip() for s in request.steps]
+    if len(events) > 20:
+        raise HTTPException(status_code=400, detail="Too many steps (max 20)")
+    if any(not e for e in events):
+        raise HTTPException(status_code=400, detail="Step event must be non-empty")
+    if len(set(events)) != len(events):
+        raise HTTPException(status_code=400, detail="Steps must be unique")
+
+    steps_json = json.dumps([s.model_dump() for s in request.steps])
+    client = get_ch_client()
+    client.insert(
+        "tgmetrics.funnel_configs",
+        [[request.project_token, steps_json, datetime.now()]],
+        column_names=["project_token", "steps_json", "updated_at"],
+    )
+    return {"status": "ok"}

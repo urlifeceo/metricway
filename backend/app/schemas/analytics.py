@@ -79,3 +79,18 @@ class FunnelStep(BaseModel):
     step_name: str
     users_count: int
     conversion_rate: float
+
+
+class FunnelStepConfig(BaseModel):
+    event: str
+    label: str = ""
+
+
+class FunnelConfigResponse(BaseModel):
+    project_token: str
+    steps: List[FunnelStepConfig]
+
+
+class FunnelConfigRequest(BaseModel):
+    project_token: str
+    steps: List[FunnelStepConfig]

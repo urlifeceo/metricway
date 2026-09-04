@@ -3,6 +3,7 @@ import api from '@/api'
 import type {
   CohortRetention,
   FunnelStep,
+  FunnelStepConfig,
   FinancialMetrics,
   TrafficMetric,
   ActivityPoint,
@@ -14,7 +15,19 @@ import type {
 
 function shiftRangeBack([from, to]: [Date, Date]): [Date, Date] {
   const duration = to.getTime() - from.getTime()
-  return [new Date(from.getTime() - duration - 1), new Date(from.getTime() - 1)]
+  return [new Date(from.getTime() - duration - 1), new Date(to.getTime() - 1)]
+}
+
+function normalizeRangeStart(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+function normalizeRangeEnd(date: Date): Date {
+  const d = new Date(date)
+  d.setHours(23, 59, 59, 999)
+  return d
 }
 
 export const useAnalyticsStore = defineStore('analytics', {
@@ -32,6 +45,7 @@ export const useAnalyticsStore = defineStore('analytics', {
     trafficMetrics: [] as TrafficMetric[],
     retentionData: [] as CohortRetention[],
     funnelData: [] as FunnelStep[],
+    funnelSteps: [] as FunnelStepConfig[],
     availableEvents: [] as string[],
     productMappings: [] as ProductMapping[],
     unknownProducts: [] as UnknownProduct[],
@@ -55,7 +69,31 @@ export const useAnalyticsStore = defineStore('analytics', {
       }
     },
 
-    async fetchAll(projectToken: string, steps?: string[]) {
+    async fetchFunnelConfig(projectToken: string) {
+      try {
+        const res = await api.get('/analytics/funnel/config', {
+          params: { project_token: projectToken }
+        })
+        this.funnelSteps = res.data.steps ?? []
+      } catch (err) {
+        this.error = 'Failed to load funnel config'
+      }
+    },
+
+    async updateFunnelSteps(projectToken: string, steps: FunnelStepConfig[]) {
+      this.funnelSteps = steps
+      try {
+        await api.put('/analytics/funnel/config', {
+          project_token: projectToken,
+          steps
+        })
+      } catch (err) {
+        this.error = 'Failed to save funnel config'
+      }
+      await this.fetchAll(projectToken)
+    },
+
+    async fetchAll(projectToken: string) {
       if (!this.timer) {
         this.loading = true
       }
@@ -77,13 +115,7 @@ export const useAnalyticsStore = defineStore('analytics', {
           to_date: prevRange[1].toISOString()
         }
 
-        let targetSteps = steps
-        if (!targetSteps?.length) {
-          if (!this.availableEvents.length) {
-            await this.fetchAvailableEvents(projectToken)
-          }
-          targetSteps = this.availableEvents.slice(0, 3)
-        }
+        const funnelEvents = this.funnelSteps.map(s => s.event)
 
         const [
           activityRes,
@@ -104,9 +136,9 @@ export const useAnalyticsStore = defineStore('analytics', {
           api.get('/analytics/retention', {
             params: { ...params, unit: 'month' }
           }),
-          targetSteps.length
+          funnelEvents.length
             ? api.get('/analytics/funnel', {
-                params: { ...params, steps: targetSteps },
+                params: { ...params, steps: funnelEvents },
                 paramsSerializer: { indexes: null }
               })
             : Promise.resolve({ data: [] }),
@@ -196,6 +228,10 @@ export const useAnalyticsStore = defineStore('analytics', {
       this.activityGranularity = granularity
     },
 
+    setDateRange(range: [Date, Date]) {
+      this.dateRange = [normalizeRangeStart(range[0]), normalizeRangeEnd(range[1])]
+    },
+
     setPeriodPreset(preset: PeriodPreset) {
       const now = new Date()
       if (preset === 'this_month') {
@@ -211,11 +247,11 @@ export const useAnalyticsStore = defineStore('analytics', {
       this.periodPreset = preset
     },
 
-    startPolling(projectToken: string, intervalMs = 10000, steps?: string[]) {
+    startPolling(projectToken: string, intervalMs = 10000) {
       this.stopPolling()
-      this.fetchAll(projectToken, steps)
+      this.fetchAll(projectToken)
       this.timer = setInterval(() => {
-        this.fetchAll(projectToken, steps)
+        this.fetchAll(projectToken)
       }, intervalMs)
     },
 

@@ -99,6 +99,30 @@ CREATE TABLE IF NOT EXISTS tgmetrics.products (
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (project_token, product_id);
 
+CREATE TABLE IF NOT EXISTS tgmetrics.users (
+    username String,
+    hashed_password String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY username;
+
+CREATE TABLE IF NOT EXISTS tgmetrics.user_projects (
+    username String,
+    project_token String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (username, project_token);
+
+CREATE TABLE IF NOT EXISTS tgmetrics.funnel_configs (
+    project_token String,
+    steps_json String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY project_token;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS tgmetrics.mv_users_meta
 TO tgmetrics.users_meta
 AS SELECT

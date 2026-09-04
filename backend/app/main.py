@@ -7,13 +7,17 @@ from apscheduler.triggers.cron import CronTrigger
 from app.services.alerts import send_daily_reports
 from app.api.v1.endpoints.analytics import router as analytics_router
 from app.api.v1.endpoints.projects import router as projects_router
-from app.api.v1.endpoints.auth import router as auth_router
-from app.core.auth import get_current_user
+from app.api.v1.endpoints.auth import router as auth_router, seed_admin
+from app.core.auth import get_current_user, require_project_access
 
 scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        seed_admin()
+    except Exception as e:
+        print(f"[warn] admin seed skipped: {e}")
     scheduler.add_job(
         send_daily_reports,
         trigger=CronTrigger(hour=9, minute=0),
@@ -37,7 +41,7 @@ app.add_middleware(
 app.include_router(
     analytics_router,
     prefix="/api/v1",
-    dependencies=[Depends(get_current_user)]
+    dependencies=[Depends(get_current_user), Depends(require_project_access)]
 )
 
 app.include_router(
