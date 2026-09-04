@@ -53,6 +53,23 @@ class TrafficSpendRequest(BaseModel):
     source: str
     spend: float
 
+
+class ProductMapping(BaseModel):
+    product_id: str
+    billing_type: str
+
+
+class ProductMappingRequest(BaseModel):
+    project_token: str
+    product_id: str
+    billing_type: str
+
+
+class UnknownProduct(BaseModel):
+    product_id: str
+    payments_count: int
+    last_amount: float
+
 class CohortRetention(BaseModel):
     cohort_date: str
     cohort_size: int

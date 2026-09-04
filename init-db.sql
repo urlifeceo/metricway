@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS tgmetrics.traffic_costs (
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (project_token, utm_source);
 
+CREATE TABLE IF NOT EXISTS tgmetrics.products (
+    project_token String,
+    product_id String,
+    billing_type String,
+    updated_at DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (project_token, product_id);
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS tgmetrics.mv_users_meta
 TO tgmetrics.users_meta
 AS SELECT

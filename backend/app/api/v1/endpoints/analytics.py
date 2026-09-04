@@ -9,6 +9,9 @@ from app.schemas.analytics import (
     UTMMetric,
     TrafficMetric,
     TrafficSpendRequest,
+    ProductMapping,
+    ProductMappingRequest,
+    UnknownProduct,
     FunnelStep,
     CohortRetention,
 )
@@ -145,28 +148,30 @@ def get_financials(
     arppu = round(total_revenue / paying_users, 2) if paying_users > 0 else 0.0
     conversion_rate = round((paying_users / total_users) * 100, 2) if total_users > 0 else 0.0
 
-    subscription_amount = """
-        multiIf(
-            positionCaseInsensitive(product_id, 'year') > 0
-                OR positionCaseInsensitive(product_id, 'annual') > 0,
-            amount / 12,
-            positionCaseInsensitive(product_id, 'month') > 0,
-            amount,
-            0
+    mrr_query = """
+        WITH product_map AS (
+            SELECT
+                product_id,
+                argMax(billing_type, updated_at) AS billing_type
+            FROM tgmetrics.products
+            WHERE project_token = {project_token:String}
+            GROUP BY product_id
         )
-    """
-
-    mrr_query = f"""
         SELECT
             sum(monthly_eq) AS mrr,
             count() AS active_subscriptions
         FROM (
             SELECT
-                user_id,
-                max({subscription_amount}) AS monthly_eq
-            FROM tgmetrics.purchases
-            WHERE project_token = {{project_token:String}}
-              AND ts >= now() - INTERVAL 31 DAY
+                p.user_id AS user_id,
+                max(multiIf(
+                    pm.billing_type = 'yearly', p.amount / 12,
+                    pm.billing_type = 'monthly', p.amount,
+                    0
+                )) AS monthly_eq
+            FROM tgmetrics.purchases AS p
+            LEFT JOIN product_map AS pm ON p.product_id = pm.product_id
+            WHERE p.project_token = {project_token:String}
+              AND p.ts >= now() - INTERVAL 31 DAY
             GROUP BY user_id
             HAVING monthly_eq > 0
         )
@@ -182,17 +187,26 @@ def get_financials(
     active_subscriptions = mrr_res[1] or 0
     arr = round(mrr * 12, 2)
 
-    churn_query = f"""
+    churn_query = """
+        WITH product_map AS (
+            SELECT
+                product_id,
+                argMax(billing_type, updated_at) AS billing_type
+            FROM tgmetrics.products
+            WHERE project_token = {project_token:String}
+            GROUP BY product_id
+        )
         SELECT
             count() AS sub_users,
             countIf(last_sub_ts < now() - INTERVAL 31 DAY) AS churned
         FROM (
             SELECT
-                user_id,
-                max(ts) AS last_sub_ts
-            FROM tgmetrics.purchases
-            WHERE project_token = {{project_token:String}}
-              AND {subscription_amount} > 0
+                p.user_id AS user_id,
+                max(p.ts) AS last_sub_ts
+            FROM tgmetrics.purchases AS p
+            INNER JOIN product_map AS pm ON p.product_id = pm.product_id
+            WHERE p.project_token = {project_token:String}
+              AND pm.billing_type IN ('monthly', 'yearly')
             GROUP BY user_id
         )
     """
@@ -462,6 +476,87 @@ def update_traffic_spend(request: TrafficSpendRequest):
     )
 
     return {"status": "ok"}
+
+
+@router.get("/products", response_model=List[ProductMapping])
+def get_products(project_token: str):
+    client = get_ch_client()
+
+    query = """
+        SELECT
+            product_id,
+            argMax(billing_type, updated_at) AS billing_type
+        FROM tgmetrics.products
+        WHERE project_token = {project_token:String}
+        GROUP BY product_id
+        ORDER BY product_id ASC
+    """
+    result = client.query(
+        query,
+        parameters={"project_token": project_token},
+    )
+
+    return [
+        ProductMapping(product_id=row[0], billing_type=row[1])
+        for row in result.result_rows
+    ]
+
+
+@router.put("/products")
+def update_product_mapping(request: ProductMappingRequest):
+    if request.billing_type not in ("monthly", "yearly", "one_time"):
+        raise HTTPException(
+            status_code=400,
+            detail="billing_type must be one of: monthly, yearly, one_time",
+        )
+
+    client = get_ch_client()
+    client.insert(
+        "tgmetrics.products",
+        [[request.project_token, request.product_id, request.billing_type, datetime.now()]],
+        column_names=["project_token", "product_id", "billing_type", "updated_at"],
+    )
+
+    return {"status": "ok"}
+
+
+@router.get("/products/unknown", response_model=List[UnknownProduct])
+def get_unknown_products(project_token: str):
+    client = get_ch_client()
+
+    query = """
+        WITH product_map AS (
+            SELECT
+                product_id,
+                argMax(billing_type, updated_at) AS billing_type
+            FROM tgmetrics.products
+            WHERE project_token = {project_token:String}
+            GROUP BY product_id
+        )
+        SELECT
+            p.product_id AS product_id,
+            count() AS payments_count,
+            argMax(p.amount, p.ts) AS last_amount
+        FROM tgmetrics.purchases AS p
+        LEFT JOIN product_map AS pm ON p.product_id = pm.product_id
+        WHERE p.project_token = {project_token:String}
+          AND pm.billing_type = ''
+        GROUP BY product_id
+        ORDER BY payments_count DESC
+    """
+    result = client.query(
+        query,
+        parameters={"project_token": project_token},
+    )
+
+    return [
+        UnknownProduct(
+            product_id=row[0],
+            payments_count=row[1],
+            last_amount=row[2] or 0.0,
+        )
+        for row in result.result_rows
+    ]
 
 
 @router.get("/retention", response_model=List[CohortRetention])

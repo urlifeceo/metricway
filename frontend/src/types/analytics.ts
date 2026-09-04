@@ -1,5 +1,9 @@
 export type ActivityGranularity = 'dau' | 'wau' | 'mau'
 
+export type PeriodPreset = 'this_month' | 'last_3_months' | 'this_year'
+
+export type BillingType = 'monthly' | 'yearly' | 'one_time'
+
 export interface ActivityPoint {
   date: string
   value: number
@@ -41,4 +45,15 @@ export interface FunnelStep {
   step_name: string
   users_count: number
   conversion_rate: number
+}
+
+export interface ProductMapping {
+  product_id: string
+  billing_type: BillingType
+}
+
+export interface UnknownProduct {
+  product_id: string
+  payments_count: number
+  last_amount: number
 }

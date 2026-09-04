@@ -9,10 +9,18 @@ import RetentionTable from '@/components/RetentionTable.vue'
 import FunnelChart from '@/components/FunnelChart.vue'
 import SubscriptionStatuses from '@/components/SubscriptionStatuses.vue'
 import TrafficTable from '@/components/TrafficTable.vue'
-import type { ActivityGranularity } from '@/types/analytics'
+import ProductMappings from '@/components/ProductMappings.vue'
+import { formatNumber, formatRatio, calcDelta } from '@/utils/format'
+import type { ActivityGranularity, PeriodPreset, FinancialMetrics } from '@/types/analytics'
 
 const store = useAnalyticsStore()
 const projectToken = ref('')
+
+const periodPresets: Array<{ id: PeriodPreset; label: string }> = [
+  { id: 'this_month', label: 'Текущий месяц' },
+  { id: 'last_3_months', label: '3 месяца' },
+  { id: 'this_year', label: 'Этот год' }
+]
 
 function loadData() {
   if (!projectToken.value.trim()) return
@@ -24,14 +32,16 @@ function onGranularityChange(granularity: ActivityGranularity) {
   loadData()
 }
 
-function formatNumber(value: number | undefined | null): string {
-  if (value === undefined || value === null) return '—'
-  return value.toLocaleString('ru-RU')
+function onManualDateChange() {
+  store.periodPreset = null
 }
 
-function formatRatio(value: number | undefined | null): string {
-  if (value === undefined || value === null || value === 0) return '—'
-  return `${value}:1`
+function d(field: keyof FinancialMetrics): number | null {
+  if (!store.financials || !store.financialsPrev) return null
+  return calcDelta(
+    store.financials[field] as number,
+    store.financialsPrev[field] as number
+  )
 }
 
 watch(() => store.dateRange, () => {
@@ -67,6 +77,7 @@ onUnmounted(() => {
         <div class="w-64">
           <VueDatePicker
             v-model="store.dateRange"
+            @update:model-value="onManualDateChange"
             range
             dark
             :enable-time-picker="false"
@@ -76,17 +87,17 @@ onUnmounted(() => {
         </div>
 
         <button
-          @click="store.setPeriodPreset('this_month')"
-          class="bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2.5 rounded-full transition active:scale-95"
+          v-for="preset in periodPresets"
+          :key="preset.id"
+          @click="store.setPeriodPreset(preset.id)"
+          class="font-medium text-sm px-5 py-2.5 rounded-full transition active:scale-95"
+          :class="
+            store.periodPreset === preset.id
+              ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20'
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+          "
         >
-          Этот месяц
-        </button>
-
-        <button
-          @click="store.setPeriodPreset('prev_month')"
-          class="bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2.5 rounded-full transition active:scale-95"
-        >
-          Предыдущий месяц
+          {{ preset.label }}
         </button>
 
         <button
@@ -104,13 +115,13 @@ onUnmounted(() => {
 
     <div v-else class="space-y-6">
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-4" v-if="store.financials">
-        <StatCard title="Выручка" :value="formatNumber(store.financials.total_revenue)" />
-        <StatCard title="MRR" :value="formatNumber(store.financials.mrr)" />
-        <StatCard title="ARR" :value="formatNumber(store.financials.arr)" />
-        <StatCard title="ARPPU" :value="formatNumber(store.financials.arppu)" />
-        <StatCard title="Активные подписки" :value="store.financials.active_subscriptions" />
-        <StatCard title="Прогнозный LTV" :value="formatNumber(store.financials.forecast_ltv)" />
-        <StatCard title="Соотношение с CAC" :value="formatRatio(store.financials.ltv_cac_ratio)" accent="green" />
+        <StatCard title="Выручка" :value="formatNumber(store.financials.total_revenue)" :delta="d('total_revenue')" />
+        <StatCard title="MRR" :value="formatNumber(store.financials.mrr)" :delta="d('mrr')" />
+        <StatCard title="ARR" :value="formatNumber(store.financials.arr)" :delta="d('arr')" />
+        <StatCard title="ARPPU" :value="formatNumber(store.financials.arppu)" :delta="d('arppu')" />
+        <StatCard title="Активные подписки" :value="store.financials.active_subscriptions" :delta="d('active_subscriptions')" />
+        <StatCard title="Прогнозный LTV" :value="formatNumber(store.financials.forecast_ltv)" :delta="d('forecast_ltv')" />
+        <StatCard title="Соотношение с CAC" :value="formatRatio(store.financials.ltv_cac_ratio)" accent="green" :delta="d('ltv_cac_ratio')" />
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -127,13 +138,13 @@ onUnmounted(() => {
       </div>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" v-if="store.financials">
-        <StatCard title="CR1 (Первый платеж)" :value="`${store.financials.cr_first}%`" />
-        <StatCard title="CR2 (Повторный платеж)" :value="`${store.financials.cr_repeat}%`" />
-        <StatCard title="Churn Rate, %" :value="`${store.financials.churn_rate}%`" />
-        <div class="bg-gray-900 border border-gray-800 p-5 rounded-xl">
+        <StatCard title="CR1 (Первый платеж)" :value="`${store.financials.cr_first}%`" :delta="d('cr_first')" />
+        <StatCard title="CR2 (Повторный платеж)" :value="`${store.financials.cr_repeat}%`" :delta="d('cr_repeat')" />
+        <StatCard title="Churn Rate, %" :value="`${store.financials.churn_rate}%`" :delta="d('churn_rate')" invert-delta />
+        <div class="bg-gray-900 border border-gray-800 p-5 rounded-xl h-full flex flex-col min-h-[104px]">
           <span class="text-xs font-medium text-gray-400 uppercase tracking-wider">Вид оттока</span>
           <select
-            class="bg-gray-800 text-sm text-gray-200 rounded-lg px-3 py-2 mt-3 w-full border border-gray-700 focus:outline-none focus:border-blue-500"
+            class="bg-gray-800 text-sm text-gray-200 rounded-lg px-3 py-2 mt-2 w-full border border-gray-700 focus:outline-none focus:border-blue-500"
           >
             <option selected>по подписке</option>
             <option disabled>по активности</option>
@@ -146,6 +157,8 @@ onUnmounted(() => {
         <SubscriptionStatuses />
         <TrafficTable :data="store.trafficMetrics" :project-token="projectToken" />
       </div>
+
+      <ProductMappings :project-token="projectToken" />
 
       <RetentionTable :data="store.retentionData" />
     </div>

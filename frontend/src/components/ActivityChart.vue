@@ -92,11 +92,27 @@ function renderChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
       plugins: {
         legend: {
           labels: {
             boxWidth: 12,
             color: '#9ca3af'
+          }
+        },
+        tooltip: {
+          backgroundColor: '#111827',
+          borderColor: '#1f2937',
+          borderWidth: 1,
+          titleColor: '#9ca3af',
+          bodyColor: '#ffffff',
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (context) => `${context.parsed.y} юзеров`
           }
         }
       },

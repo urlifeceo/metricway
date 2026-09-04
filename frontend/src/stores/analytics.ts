@@ -6,8 +6,16 @@ import type {
   FinancialMetrics,
   TrafficMetric,
   ActivityPoint,
-  ActivityGranularity
+  ActivityGranularity,
+  PeriodPreset,
+  ProductMapping,
+  UnknownProduct
 } from '@/types/analytics'
+
+function shiftRangeBack([from, to]: [Date, Date]): [Date, Date] {
+  const duration = to.getTime() - from.getTime()
+  return [new Date(from.getTime() - duration - 1), new Date(from.getTime() - 1)]
+}
 
 export const useAnalyticsStore = defineStore('analytics', {
   state: () => ({
@@ -15,14 +23,18 @@ export const useAnalyticsStore = defineStore('analytics', {
       new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
       new Date()
     ] as [Date, Date],
+    periodPreset: null as PeriodPreset | null,
 
     activityGranularity: 'dau' as ActivityGranularity,
     activityData: [] as ActivityPoint[],
     financials: null as FinancialMetrics | null,
+    financialsPrev: null as FinancialMetrics | null,
     trafficMetrics: [] as TrafficMetric[],
     retentionData: [] as CohortRetention[],
     funnelData: [] as FunnelStep[],
     availableEvents: [] as string[],
+    productMappings: [] as ProductMapping[],
+    unknownProducts: [] as UnknownProduct[],
 
     loading: false,
     error: null as string | null,
@@ -58,6 +70,13 @@ export const useAnalyticsStore = defineStore('analytics', {
           to_date: toDate.toISOString()
         }
 
+        const prevRange = shiftRangeBack(this.dateRange)
+        const prevParams = {
+          project_token: projectToken,
+          from_date: prevRange[0].toISOString(),
+          to_date: prevRange[1].toISOString()
+        }
+
         let targetSteps = steps
         if (!targetSteps?.length) {
           if (!this.availableEvents.length) {
@@ -69,14 +88,18 @@ export const useAnalyticsStore = defineStore('analytics', {
         const [
           activityRes,
           finRes,
+          finPrevRes,
           trafficRes,
           retentionRes,
-          funnelRes
+          funnelRes,
+          productsRes,
+          unknownProductsRes
         ] = await Promise.all([
           api.get('/analytics/activity', {
             params: { ...params, granularity: this.activityGranularity }
           }),
           api.get('/analytics/financials', { params }),
+          api.get('/analytics/financials', { params: prevParams }),
           api.get('/analytics/traffic', { params }),
           api.get('/analytics/retention', {
             params: { ...params, unit: 'month' }
@@ -86,14 +109,23 @@ export const useAnalyticsStore = defineStore('analytics', {
                 params: { ...params, steps: targetSteps },
                 paramsSerializer: { indexes: null }
               })
-            : Promise.resolve({ data: [] })
+            : Promise.resolve({ data: [] }),
+          api.get('/analytics/products', {
+            params: { project_token: projectToken }
+          }),
+          api.get('/analytics/products/unknown', {
+            params: { project_token: projectToken }
+          })
         ])
 
         this.activityData = activityRes.data
         this.financials = finRes.data
+        this.financialsPrev = finPrevRes.data
         this.trafficMetrics = trafficRes.data
         this.retentionData = retentionRes.data
         this.funnelData = funnelRes.data
+        this.productMappings = productsRes.data
+        this.unknownProducts = unknownProductsRes.data
       } catch (err) {
         this.error = 'Failed to fetch analytics'
       } finally {
@@ -130,20 +162,53 @@ export const useAnalyticsStore = defineStore('analytics', {
       }
     },
 
+    async saveProductMapping(projectToken: string, productId: string, billingType: string) {
+      try {
+        await api.put('/analytics/products', {
+          project_token: projectToken,
+          product_id: productId,
+          billing_type: billingType
+        })
+        const [productsRes, unknownRes, finRes] = await Promise.all([
+          api.get('/analytics/products', {
+            params: { project_token: projectToken }
+          }),
+          api.get('/analytics/products/unknown', {
+            params: { project_token: projectToken }
+          }),
+          api.get('/analytics/financials', {
+            params: {
+              project_token: projectToken,
+              from_date: this.dateRange[0].toISOString(),
+              to_date: this.dateRange[1].toISOString()
+            }
+          })
+        ])
+        this.productMappings = productsRes.data
+        this.unknownProducts = unknownRes.data
+        this.financials = finRes.data
+      } catch (err) {
+        this.error = 'Failed to save product mapping'
+      }
+    },
+
     setGranularity(granularity: ActivityGranularity) {
       this.activityGranularity = granularity
     },
 
-    setPeriodPreset(preset: 'this_month' | 'prev_month') {
+    setPeriodPreset(preset: PeriodPreset) {
       const now = new Date()
       if (preset === 'this_month') {
         this.dateRange = [new Date(now.getFullYear(), now.getMonth(), 1), now]
-      } else {
+      } else if (preset === 'last_3_months') {
         this.dateRange = [
-          new Date(now.getFullYear(), now.getMonth() - 1, 1),
-          new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59)
+          new Date(now.getFullYear(), now.getMonth() - 3, now.getDate()),
+          now
         ]
+      } else {
+        this.dateRange = [new Date(now.getFullYear(), 0, 1), now]
       }
+      this.periodPreset = preset
     },
 
     startPolling(projectToken: string, intervalMs = 10000, steps?: string[]) {
